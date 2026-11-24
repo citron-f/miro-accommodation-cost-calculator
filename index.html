@@ -2,45 +2,105 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Trips Price Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Price calculator</title>
   <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
   <style>
-    body { font: 16px system-ui; margin: 20px; }
+    body { font: 15px system-ui, sans-serif; margin: 20px; }
     label { display: block; margin-bottom: 12px; }
-    input { display: block; width: 100%; box-sizing: border-box; }
+    input, select {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 4px;
+      padding: 6px;
+      font: inherit;
+    }
+    button { font: inherit; padding: 6px 10px; }
   </style>
 </head>
 <body>
   <form id="calculator" hidden>
-    <p>Select one text box on the board, then enter the price here.</p>
-    <label>Total price ($)
+    <p>Select one text box on the board, then enter the price.</p>
+
+    <label>Price currency
+      <select name="from">
+        <option value="AUD">AUD — Australian dollar</option>
+        <option value="EUR">EUR — Euro</option>
+        <option value="SEK">SEK — Swedish krona</option>
+      </select>
+    </label>
+
+    <label>Convert to
+      <select name="to">
+        <option value="AUD">AUD — Australian dollar</option>
+        <option value="EUR" selected>EUR — Euro</option>
+        <option value="SEK">SEK — Swedish krona</option>
+      </select>
+    </label>
+
+    <label>Total price
       <input name="total" type="number" min="0" step="0.01" required>
     </label>
     <label>People
-      <input name="people" type="number" min="1" value="2" required>
+      <input name="people" type="number" min="1" step="1" value="2" required>
     </label>
     <label>Nights
-      <input name="nights" type="number" min="1" value="2" required>
+      <input name="nights" type="number" min="1" step="1" value="2" required>
     </label>
+
     <button type="submit">Update price box</button>
     <p id="status" role="status"></p>
   </form>
 
   <script>
     const form = document.querySelector('#calculator');
+    const status = document.querySelector('#status');
+    const updateButton = form.querySelector('button');
+    const decimals = new Intl.NumberFormat('en-AU', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
 
     if (new URLSearchParams(location.search).has('panel')) {
       form.hidden = false;
       form.addEventListener('submit', updatePriceBox);
     } else {
       miro.board.ui.on('icon:click', async () => {
-        await miro.board.ui.openPanel({ url: 'index.html?panel=1' });
+        await miro.board.ui.openPanel({
+          url: new URL('index.html?panel=1', location.href).href
+        });
       });
+    }
+
+    function formatPrice(amount, currency) {
+      const value = decimals.format(amount);
+      const formats = {
+        AUD: `$${value}`,
+        EUR: `${value}€`,
+        SEK: `${value} kr`
+      };
+      return formats[currency];
+    }
+
+    function priceLine(label, value) {
+      const gap = '\u00a0'.repeat(24 - label.length);
+      return `<p><span style="font-family:monospace">${label}${gap}${value}</span></p>`;
     }
 
     async function updatePriceBox(event) {
       event.preventDefault();
-      const status = document.querySelector('#status');
+      const fields = new FormData(form);
+      const from = fields.get('from');
+      const to = fields.get('to');
+
+      if (from === to) {
+        status.textContent = 'Choose two different currencies.';
+        return;
+      }
+
+      updateButton.disabled = true;
+      status.textContent = 'Getting the exchange rate…';
 
       try {
         const selected = await miro.board.getSelection();
@@ -49,26 +109,55 @@
           return;
         }
 
-        const fields = new FormData(form);
+        const box = selected[0];
+        const originalContent = box.content;
+        const params = new URLSearchParams({ base: from, quotes: to });
+        const response = await fetch(
+          `https://api.frankfurter.dev/v2/rates?${params}`,
+          { signal: AbortSignal.timeout(10000) }
+        );
+
+        if (!response.ok) {
+          throw new Error('The exchange-rate service is unavailable. Try again.');
+        }
+
+        const rates = await response.json();
+        const rate = rates.find(entry => entry.base === from && entry.quote === to)?.rate;
+
+        if (!Number.isFinite(rate) || rate <= 0) {
+          throw new Error(`No exchange rate is available for ${from} to ${to}.`);
+        }
+
+        const currentSelection = await miro.board.getSelection();
+        if (currentSelection.length !== 1 ||
+            currentSelection[0].id !== box.id ||
+            currentSelection[0].content !== originalContent) {
+          status.textContent = 'The selection or text changed. Click Update again.';
+          return;
+        }
+
         const total = Number(fields.get('total'));
         const people = Number(fields.get('people'));
         const nights = Number(fields.get('nights'));
-        const dollars = new Intl.NumberFormat('en-US', {
-          style: 'currency',
-          currency: 'USD'
-        });
+        const perPerson = total / people;
+        const perNight = perPerson / nights;
+        const nightLabel = nights === 1 ? 'night' : 'nights';
+        const bothCurrencies = amount =>
+          `${formatPrice(amount, from)} | ${formatPrice(amount * rate, to)}`;
 
-        const box = selected[0];
-        box.content = [
-          `<p>Price TOT: ${dollars.format(total)}</p>`,
-          `<p>Price / person: ${dollars.format(total / people)}</p>`,
-          `<p>Price / person / night: ${dollars.format(total / (people * nights))}</p>`
+        const target = currentSelection[0];
+        target.content = [
+          priceLine('Price TOT:', `${formatPrice(total, from)} (${nights} ${nightLabel})`),
+          priceLine('Price / person:', bothCurrencies(perPerson)),
+          priceLine('Price / person / night:', bothCurrencies(perNight))
         ].join('');
-        await box.sync();
 
-        status.textContent = 'Price box updated.';
+        await target.sync();
+        status.textContent = `Price box updated. Rate: 1 ${from} = ${rate} ${to}.`;
       } catch (error) {
-        status.textContent = `Could not update the price box: ${error.message}`;
+        status.textContent = `Could not update the price box. ${error.message}`;
+      } finally {
+        updateButton.disabled = false;
       }
     }
   </script>
