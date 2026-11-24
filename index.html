@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Price calculator</title>
+  <title>Accommodation Cost Calculator</title>
   <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
   <style>
     body { font: 15px system-ui, sans-serif; margin: 20px; }
@@ -21,6 +21,7 @@
 </head>
 <body>
   <form id="calculator" hidden>
+    <p>Split accommodation costs per person and per night, and see the results in two currencies.</p>
     <p>Select one text box on the board, then enter the price.</p>
 
     <label>Price currency
@@ -152,6 +153,9 @@
           priceLine('Price / person / night:', bothCurrencies(perNight))
         ].join('');
 
+        target.style.fontFamily = 'roboto_mono';
+        target.style.textAlign = 'left';
+        
         await target.sync();
         status.textContent = `Price box updated. Rate: 1 ${from} = ${rate} ${to}.`;
       } catch (error) {
